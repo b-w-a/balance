@@ -30,3 +30,19 @@ t.test(df[df$treat == 1,]$income, df[df$treat == 0,]$income)$p.value # just the 
 ```
 
 If we know this works, then we should be able to apply the same idea to the natural experiments right? If we gather up a bunch of covariates, we can do the same thing and we can show that the literally is no difference between treatment and control groups, right? In theory yes, but there are a number of issues that come up. 
+
+# Our Applied Example
+
+We replicated the 2007 paper "Identifying the Persuasive Effects of Presidential Advertising" by Gregory A. Huber (Yale University) Kevin Arceneaux (Temple University) available in *AJPS.* We present the code and data to perform the replication as well as a short write up of our findings and a presentation we used for the class. 
+
+One of the first issues is the potential for balance on linear and addictive functions of the covariates yet the possibility that in non-linear or non-additive functions, there is imbalance. We figured machine learning is the correct approach to solve this type of problem. While it's conceivable to write out all meaningful non-linear or non-additive functions, this process quickly becomes quite intensive. It's also quickly realized that there a too many possible functions to write down. Machine Learning gets around this problem. Since this was part of a course, we used a number of standard ML algorithms to start and then moved to more complex ones later. 
+
+As applied social scientists, we also had another goal. If there is imbalance outside simple linear and additive functions, what do we do about it? For us, solutions to address the problem are almost as important as the very problem itself. We tried a number of matching techniques to solve this problem when we did find imbalance. That code and write is up also included. 
+
+
+
+
+
+
+
+
