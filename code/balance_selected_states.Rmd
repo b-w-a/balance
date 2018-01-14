@@ -1,0 +1,1122 @@
+---
+title: "ML Selected States"
+author: "Bryan Wilcox + Tyler Reny"
+date: "March 5, 2016"
+output: html_document
+---
+
+```{r setup, warning=FALSE, message=FALSE, echo=FALSE, results='hide'}
+knitr::opts_chunk$set(cache=TRUE)
+library(caret)
+library(foreign)
+library(dplyr)
+library(date)
+library(car)
+library(knitr)
+library(MASS)
+library(e1071)
+library(glmnet)
+library(ROCR)
+library(KRLS)
+library(gridExtra)
+source("krlogit_trunc_2.R")
+
+df <- read.dta("CS_mmn_recoded2.dta", convert.dates = F)
+
+drop <- which(df$us_citizen == 0)
+df <- df[-drop,]
+df$us_citizen %>% table()
+
+df$state <- tolower(df$state)
+
+#drop DC
+drop <- which(df$state == "dc")
+df <- df[-drop,]
+table(df$state == "dc")
+
+drop <- which(df$month < 9)
+df <- df[-drop,]
+
+table(df$state=="id")
+table(df$state=="ms")
+table(df$state=="mt")
+table(df$state=="ri")
+table(df$state=="vt")
+table(df$state=="wy")
+drop <- which(df$state=="id" | df$state=="ms" | df$state=="mt" |df$state=="ri" |df$state=="vt" | df$state=="wy")
+df <- df[-drop,]
+
+df$BGVEP <- ifelse(df$state == "ar" | df$state=="de" | df$state=="fl" |
+                     df$state == "il" | df$state=="ia" | df$state=="ky"|
+                     df$state == "la" | df$state=="me" | df$state=="mi" |
+                     df$state == "mn" | df$state=="mo" | df$state=="mt" |
+                     df$state == "nv" | df$state=="nh" | df$state=="nm" |
+                     df$state == "oh" | df$state=="or" | df$state=="pa" |
+                     df$state == "tn" | df$state=="wa" | df$state=="wi" , 1, 0)
+
+df$BGCNN <- ifelse(df$state == "az" | df$state=="ar" | df$state=="de" |
+                     df$state == "fl" | df$state=="il" | df$state=="ia"|
+                     df$state == "la" | df$state=="me" | df$state=="mi" |
+                     df$state == "mo" | df$state=="nv" | df$state=="nh" |
+                     df$state == "nm" | df$state=="oh" | df$state=="or" |
+                     df$state == "pa" | df$state=="tn" | df$state=="wa" |
+                     df$state == "wv" | df$state=="wi" , 1, 0)
+
+df$BATTLEGROUND <- df$BGVEP
+df <- df[-c(which(df$BATTLEGROUND==1)),]
+
+sd <- factor(df$state)
+mm <- model.matrix(~factor(sd) - 1)
+colnames(mm) <- c("sd_1","sd_2","sd_3","sd_4","sd_5",
+                  "sd_6","sd_7","sd_8","sd_9","sd_10",
+                  "sd_11","sd_12","sd_13","sd_14","sd_15",
+                  "sd_16","sd_17","sd_18","sd_19","sd_20")
+mm <- mm[,-3] #exclude california
+df <- cbind(df, mm)
+
+df$statecd <- paste(toupper(df$state),df$cu01,sep="")
+
+df$comphouse <- ifelse(df$statecd=="AR4"	|
+df$statecd=="AR4"	| df$statecd=="CA15"	| df$statecd=="CA20"	| df$statecd=="CA27"	|
+df$statecd=="CA36"	| df$statecd=="CA49"	| df$statecd=="CT2"	| df$statecd=="CT5"	|
+df$statecd=="FL12"	| df$statecd=="FL22"	| df$statecd=="FL3"	| df$statecd=="FL8"	|
+df$statecd=="IL10"	| df$statecd=="IL17"	| df$statecd=="IN8"	| df$statecd=="KS3"	|
+df$statecd=="KY1"	| df$statecd=="KY3"	| df$statecd=="KY6"	| df$statecd=="MI8"	|
+df$statecd=="MN6"	| df$statecd=="MO6"	| df$statecd=="MS4"	| df$statecd=="MT1"	|
+df$statecd=="NC11"	| df$statecd=="NC8"	| df$statecd=="NH2"	| df$statecd=="NJ12"	|
+df$statecd=="NJ7"	| df$statecd=="NM1"	| df$statecd=="NV1"	| df$statecd=="NY2"	|
+df$statecd=="OH12"	| df$statecd=="OK2"	| df$statecd=="PA10"	| df$statecd=="PA13"	|
+df$statecd=="PA4"	| df$statecd=="UT2"	| df$statecd=="VA2"	| df$statecd=="WA1"	|
+df$statecd=="WA2"	| df$statecd=="WA5"	| df$statecd=="WV2" ,1,0)
+
+x <- mdy.date(df$month,df$day,rep(2000,nrow(df)))
+tmp <- as.numeric(x)
+df$interviewweekdummy <- as.integer((tmp-14854)/7)
+wd <- model.matrix(~factor(df$interviewweekdummy)-1)
+colnames(wd) <- c("wd_1","wd_2","wd_3","wd_4","wd_5",
+                  "wd_6","wd_7","wd_8","wd_9","wd_10")
+wd <- wd[,-1] #drop wd1 as base category
+df <- cbind(df,wd)
+
+df$ms4_bushmargin_grp <- df$ms4_pro_bush-df$ms4_pro_gore_grp
+
+df$age2 <- df$age*df$age
+
+df$abspid5 <- abs(df$pid5) #fold partisanship over on itself
+
+df$absideology <- abs(df$ideology) #fold ideology over on itself
+
+df$media_zone_text <- paste(df$mmn,df$state, sep="")
+df$media_zone <- as.factor(df$media_zone_text)
+
+###OTHER VARIABLES OF INTEREST
+
+df$watch_tv <- df$ce01
+df$watch_tv <- recode(df$watch_tv, "998:999=NA") #7 is highest
+df$newspaper <- df$ce13
+df$newspaper <- recode(df$newspaper, "998:999=NA") #7 is highest
+df$talk_radio <- df$ce18
+df$talk_radio <- recode(df$talk_radio, "998:999=NA") #7 is highest
+df$married <- df$cw08
+df$married <- recode(df$married, "2:6=0;998:999=NA") #7 is highest
+df$health_insurance <- df$cw20
+df$health_insurance <- recode(df$health_insurance, "2=0;998:999=NA") #7 is highest
+
+df$ad_dummy <- ifelse(df$ms4_presadgrp > 0,1,0)
+
+df_clean <- df %>% dplyr::select(ad_dummy,ideology,pid5,attend_church,union,income,income_dkna,employed,education,hispanic,white,female,age,watch_tv,newspaper,talk_radio,married,health_insurance,state) %>% na.omit()
+
+set.seed(1234)
+trainIndex <- createDataPartition(df_clean$ad_dummy, p = 0.75, list = F, times = 1)
+
+df_train <- df_clean[ trainIndex,]
+df_test  <- df_clean[-trainIndex,]
+
+df_train$married <- df_train$married %>% as.numeric
+df_train$health_insurance <- df_train$health_insurance %>% as.numeric
+df_test$married <- df_test$married %>% as.numeric
+df_test$health_insurance <- df_test$health_insurance %>% as.numeric
+
+table(df_train$state,df_train$ad_dummy)
+table(df_test$state,df_test$ad_dummy)
+
+df_train$married <- df_train$married %>% as.numeric
+df_train$health_insurance <- df_train$health_insurance %>% as.numeric
+df_test$married <- df_test$married %>% as.numeric
+df_test$health_insurance <- df_test$health_insurance %>% as.numeric
+```
+
+# I plan to use 
+
+## CA
+```{r}
+df_ca <- df_clean %>% filter(state=="ca")
+train <- df_train %>% filter(state=="ca")
+test <- df_test %>% filter(state=="ca")
+Xtrain <- train[,c(2:18)]%>% as.matrix
+ytrain <- train[,1] %>% as.matrix 
+Xtest <- test[,c(2:18)] %>% as.matrix
+ytest <- test[,1] %>% as.matrix
+
+#logit 
+model <- ad_dummy ~ ideology + pid5 + attend_church + union + income + income_dkna + employed + education + hispanic + white + female + age + watch_tv + newspaper + talk_radio + as.numeric(married) + as.numeric(health_insurance)
+glm.out <- glm(model, family = binomial(link="logit"), data = train)
+
+#in sample
+yhat <- predict(glm.out, newdata=train, type="response")
+yhat <- ifelse(yhat > .5, 1, 0)
+prop.table(table(predicted=yhat, truth=train$ad_dummy))
+
+#out of sample
+yhat <- predict(glm.out, newdata=test, type="response")
+yhat <- ifelse(yhat > .5, 1, 0)
+prop.table(table(predicted=yhat, truth=test$ad_dummy))
+
+# SVM 
+set1 <- data.frame(y=as.factor(train$ad_dummy),x=train[,c(2:18)])
+set2 <- data.frame(y=as.factor(test$ad_dummy),x=test[,c(2:18)])
+
+fit1 <- svm(y ~ ., data = set1, kernel="linear", cost = 1)
+pred.orig <- predict(fit1,set2)
+prop.table(table(predicted=pred.orig,truth=set2$y))
+prop.table(table(pred.orig==set2$y))
+
+# tune1 <- tune(svm,y ~ .,data=set1, kernel='linear')
+# summary(tune1)
+# bestmod <- tune1$best.model
+# summary(bestmod)
+
+krls.out <- krls(X = Xtrain, y = ytrain)
+
+#out of sample
+krls.test <- predict(krls.out, newdata = Xtest)
+cor(krls.test$fit,ytest)
+krls.y.fit <- ifelse(krls.test$fit > .5, 1,0)
+prop.table(table(true = ytest, predicted = krls.y.fit ))
+prop.table(table(ytest == krls.y.fit ))
+
+#Now ROC plots
+#GLM
+prob <- predict(glm.out, newdata=test, type="response")
+prob <- ifelse(prob > .5, 1, 0)
+pred <- prediction(as.numeric(prob), as.matrix(test$ad_dummy))
+perf <- performance(pred, measure = "tpr", x.measure = "fpr")
+auc <- performance(pred, measure = "auc")
+auc.glm <- auc@y.values[[1]]
+
+roc.data.glm <- data.frame(fpr=unlist(perf@x.values),
+                       tpr=unlist(perf@y.values),
+                       model="GLM")
+ggplot(roc.data.glm, aes(x=fpr, ymin=0, ymax=tpr)) +
+    geom_ribbon(alpha=0.2) +
+    geom_line(aes(y=tpr)) +
+    annotate("text", x=.1, y=.8, label=paste("Logit", round(auc.glm,3), sep=" ")) +
+    geom_abline(intercept=0, slope=1, color="red", linetype=2) +
+  theme_minimal()
+
+#SVM
+
+prob <- predict(fit1,set2)
+pred <- prediction(as.numeric(prob), as.matrix(test$ad_dummy))
+perf <- performance(pred, measure = "tpr", x.measure = "fpr")
+auc <- performance(pred, measure = "auc")
+auc.svm <- auc@y.values[[1]]
+
+roc.data.svm <- data.frame(fpr=unlist(perf@x.values),
+                       tpr=unlist(perf@y.values),
+                       model="SVM")
+ggplot(roc.data.svm, aes(x=fpr, ymin=0, ymax=tpr)) +
+    geom_ribbon(alpha=0.2) +
+    geom_line(aes(y=tpr)) +
+    annotate("text", x=.1, y=.8, label=paste("SVM", round(auc.svm,3), sep=" ")) +
+    geom_abline(intercept=0, slope=1, color="red", linetype=2) + theme_minimal()
+
+#KRLS
+
+#out of sample
+krls.test <- predict(krls.out, newdata = Xtest)
+prob <- krls.test$fit
+pred <- prediction(prob, ytest)
+perf <- performance(pred, measure = "tpr", x.measure = "fpr")
+auc <- performance(pred, measure = "auc")
+auc.krls <- auc@y.values[[1]]
+
+roc.data.krls <- data.frame(fpr=unlist(perf@x.values),
+                       tpr=unlist(perf@y.values),
+                       model="KRLS")
+ggplot(roc.data.krls, aes(x=fpr, ymin=0, ymax=tpr)) +
+    geom_ribbon(alpha=0.2) +
+    geom_line(aes(y=tpr)) +
+    annotate("text", x=.1, y=.8, label=paste("KRLS", round(auc.krls,3), sep=" ")) +
+    geom_abline(intercept=0, slope=1, color="red", linetype=2) + theme_minimal()
+
+
+####
+#Combine all
+####
+
+fulldata <- rbind(roc.data.glm,
+                  roc.data.svm,
+                  roc.data.krls)
+
+
+combined_ca <- ggplot(fulldata, aes(x=fpr,  y=tpr, group =model)) +
+  geom_line() +
+  theme(legend.position="none") +
+  labs(x="", y="") +
+  geom_abline(intercept=0, slope=1, color="red", linetype=2) + 
+  theme_minimal() +
+  annotate("text", x=rep(.15,4),  size=2.5,
+           y=c(.9, .85, .8, .75), 
+           label=c("Area Under Curve",
+                   paste("GLM", round(auc.glm,3), sep=" "),
+                   paste("SVM", round(auc.svm,3), sep=" "),
+                   paste("KRLS", round(auc.krls,3), sep=" ")))
+
+
+```
+
+##Matching for CA 
+
+```{r}
+library(MatchIt)
+source("/Users/bryanwilcox/Desktop/KBAL/R/kbal.R") # this doesntwork for some reason
+df_ca <- df_clean %>% filter(state=="ca")
+
+df_ca$married <- df_ca$married %>% as.numeric
+df_ca$health_insurance <- df_ca$health_insurance %>% as.numeric
+
+#these are for the kernal balancing, which I cant get to run
+X <- df_ca[,c(2:18)]%>% as.matrix
+Y <- df_ca[,1] %>% as.matrix 
+head(X)
+head(Y)
+
+kbal.out <- kbal(X=X, D=Y)
+summary(kbal.out)
+names(kbal.out)
+
+summary(lm(Y ~ X,w=kbal.out$w))
+
+
+
+# here are 3 different matching spec. full, nearest, and genetic
+m.full <- matchit(ad_dummy ~ ideology + pid5 + attend_church + union + income + income_dkna + employed + education + hispanic + white + female + age + watch_tv + newspaper + talk_radio + married + health_insurance, data = df_ca, method = "full")
+summary(m.full)
+
+m.nearest <- matchit(ad_dummy ~ ideology + pid5 + attend_church + union + income + income_dkna + employed + education + hispanic + white + female + age + watch_tv + newspaper + talk_radio + married + health_insurance, data = df_ca, method = "nearest")
+summary(m.nearest)
+
+m.genetic <- matchit(ad_dummy ~ ideology + pid5 + attend_church + union + income + income_dkna + employed + education + hispanic + white + female + age + watch_tv + newspaper + talk_radio + married + health_insurance, data = df_ca, method = "genetic") 
+summary(m.genetic)
+
+full.data <- match.data(m.full)
+nearest.data <- match.data(m.nearest)
+genetic.data <- match.data(m.genetic)
+
+
+set.seed(1234)
+
+full.index <- createDataPartition(full.data$ad_dummy, p = 0.75, list = F, times = 1)
+nearest.index <- createDataPartition(nearest.data$ad_dummy, p = 0.75, list = F, times = 1)
+genetic.index <- createDataPartition(genetic.data$ad_dummy, p = 0.75, list = F, times = 1)
+
+full.train <- full.data[ full.index,] 
+full.test <- full.data[-full.index,] 
+
+near.train <- nearest.data[ nearest.index,]
+near.test <- nearest.data[-nearest.index,]
+
+gen.train  <- genetic.data[genetic.index,]
+gen.test <- genetic.data[-genetic.index,]
+
+
+
+full.train$married <- full.train$married %>% as.numeric
+full.train$health_insurance <- full.train$health_insurance %>% as.numeric
+full.test$married <- full.test$married %>% as.numeric
+full.test$health_insurance <- full.test$health_insurance %>% as.numeric
+
+near.train$married <- near.train$married %>% as.numeric
+near.train$health_insurance <- near.train$health_insurance %>% as.numeric
+near.test$married <- near.test$married %>% as.numeric
+near.test$health_insurance <- near.test$health_insurance %>% as.numeric
+
+gen.train$married <- gen.train$married %>% as.numeric
+gen.train$health_insurance <- gen.train$health_insurance %>% as.numeric
+gen.test$married <- gen.test$married %>% as.numeric
+gen.test$health_insurance <- gen.test$health_insurance %>% as.numeric
+```
+
+#Now move into analysis 
+## full match
+
+```{r}
+train <- full.train 
+test <- full.test
+Xtrain <- train[,c(2:18)]%>% as.matrix
+ytrain <- train[,1] %>% as.matrix 
+Xtest <- test[,c(2:18)] %>% as.matrix
+ytest <- test[,1] %>% as.matrix
+
+
+#logit 
+model <- ad_dummy ~ ideology + pid5 + attend_church + union + income + income_dkna + employed + education + hispanic + white + female + age + watch_tv + newspaper + talk_radio + as.numeric(married) + as.numeric(health_insurance)
+glm.out <- glm(model, family = binomial(link="logit"), data = train)
+
+
+#out of sample
+yhat <- predict(glm.out, newdata=test, type="response")
+yhat <- ifelse(yhat > .5, 1, 0)
+glm.error.full <- prop.table(table(yhat==test$ad_dummy))
+
+# SVM 
+set1 <- data.frame(y=as.factor(train$ad_dummy),x=train[,c(2:18)])
+set2 <- data.frame(y=as.factor(test$ad_dummy),x=test[,c(2:18)])
+
+fit1 <- svm(y ~ ., data = set1, kernel="linear", cost = 1)
+pred.orig <- predict(fit1,set2)
+svm.error.full <- prop.table(table(pred.orig==set2$y))
+
+# tune1 <- tune(svm,y ~ .,data=set1, kernel='linear')
+# summary(tune1)
+# bestmod <- tune1$best.model
+# summary(bestmod)
+
+krls.out <- krls(X = Xtrain, y = ytrain)
+
+#out of sample
+krls.test <- predict(krls.out, newdata = Xtest, type = "class")
+cor(krls.test$fit,ytest)
+krls.y.fit <- ifelse(krls.test$fit > .5, 1,0)
+krls.error.full <- prop.table(table(ytest==krls.y.fit ))
+
+# prop.table(table(krls.test == ytest))
+
+#Now ROC plots
+#GLM
+prob <- predict(glm.out, newdata=test, type="response")
+prob <- ifelse(prob > .5, 1, 0)
+pred <- prediction(as.numeric(prob), as.matrix(test$ad_dummy))
+perf <- performance(pred, measure = "tpr", x.measure = "fpr")
+auc <- performance(pred, measure = "auc")
+auc.glm <- auc@y.values[[1]]
+
+roc.data.glm <- data.frame(fpr=unlist(perf@x.values),
+                       tpr=unlist(perf@y.values),
+                       model="GLM")
+ggplot(roc.data.glm, aes(x=fpr, ymin=0, ymax=tpr)) +
+    geom_ribbon(alpha=0.2) +
+    geom_line(aes(y=tpr)) +
+    annotate("text", x=.1, y=.8, label=paste("Logit", round(auc.glm,3), sep=" ")) +
+    geom_abline(intercept=0, slope=1, color="red", linetype=2) +
+  theme_minimal()
+
+#SVM
+
+prob <- predict(fit1,set2)
+pred <- prediction(as.numeric(prob), as.matrix(test$ad_dummy))
+perf <- performance(pred, measure = "tpr", x.measure = "fpr")
+auc <- performance(pred, measure = "auc")
+auc.svm <- auc@y.values[[1]]
+
+roc.data.svm <- data.frame(fpr=unlist(perf@x.values),
+                       tpr=unlist(perf@y.values),
+                       model="SVM")
+ggplot(roc.data.svm, aes(x=fpr, ymin=0, ymax=tpr)) +
+    geom_ribbon(alpha=0.2) +
+    geom_line(aes(y=tpr)) +
+    annotate("text", x=.1, y=.8, label=paste("SVM", round(auc.svm,3), sep=" ")) +
+    geom_abline(intercept=0, slope=1, color="red", linetype=2) + theme_minimal()
+
+#KRLS
+
+#out of sample
+krls.test <- predict(krls.out, newdata = Xtest)
+prob <- krls.test$fit
+pred <- prediction(prob, ytest)
+perf <- performance(pred, measure = "tpr", x.measure = "fpr")
+auc <- performance(pred, measure = "auc")
+auc.krls <- auc@y.values[[1]]
+
+roc.data.krls <- data.frame(fpr=unlist(perf@x.values),
+                       tpr=unlist(perf@y.values),
+                       model="KRLS")
+ggplot(roc.data.krls, aes(x=fpr, ymin=0, ymax=tpr)) +
+    geom_ribbon(alpha=0.2) +
+    geom_line(aes(y=tpr)) +
+    annotate("text", x=.1, y=.8, label=paste("KRLS", round(auc.krls,3), sep=" ")) +
+    geom_abline(intercept=0, slope=1, color="red", linetype=2) + theme_minimal()
+
+
+####
+#Combine all
+####
+
+fulldata <- rbind(roc.data.glm,
+                  roc.data.svm,
+                  roc.data.krls)
+
+
+full_match_ca <- ggplot(fulldata, aes(x=fpr,  y=tpr, group =model)) +
+  geom_line() +
+  theme(legend.position="none") +
+  labs(x="", y="") +
+  geom_abline(intercept=0, slope=1, color="red", linetype=2) + 
+  theme_minimal() +
+  annotate("text", x=rep(.15,4), size=2.5, 
+           y=c(.9, .85, .8, .75), 
+           label=c("Area Under Curve",
+                   paste("GLM", round(auc.glm,3), sep=" "),
+                   paste("SVM", round(auc.svm,3), sep=" "),
+                   paste("KRLS", round(auc.krls,3), sep=" ")))
+```
+
+## NEAREST NEIGHBOR MATCH
+
+```{r}
+train <- near.train
+test <- near.test
+Xtrain <- train[,c(2:18)]%>% as.matrix
+ytrain <- train[,1] %>% as.matrix 
+Xtest <- test[,c(2:18)] %>% as.matrix
+ytest <- test[,1] %>% as.matrix
+
+
+#logit 
+model <- ad_dummy ~ ideology + pid5 + attend_church + union + income + income_dkna + employed + education + hispanic + white + female + age + watch_tv + newspaper + talk_radio + as.numeric(married) + as.numeric(health_insurance)
+glm.out <- glm(model, family = binomial(link="logit"), data = train)
+
+#out of sample
+yhat <- predict(glm.out, newdata=test, type="response")
+yhat <- ifelse(yhat > .5, 1, 0)
+glm.error.near <- prop.table(table(yhat==test$ad_dummy))
+
+# SVM 
+set1 <- data.frame(y=as.factor(train$ad_dummy),x=train[,c(2:18)])
+set2 <- data.frame(y=as.factor(test$ad_dummy),x=test[,c(2:18)])
+
+fit1 <- svm(y ~ ., data = set1, kernel="linear", cost = 1)
+pred.orig <- predict(fit1,set2)
+svm.error.near <- prop.table(table(pred.orig==set2$y))
+
+# tune1 <- tune(svm,y ~ .,data=set1, kernel='linear')
+# summary(tune1)
+# bestmod <- tune1$best.model
+# summary(bestmod)
+
+krls.out <- krls(X = Xtrain, y = ytrain)
+
+#out of sample
+krls.test <- predict(krls.out, newdata = Xtest)
+cor(krls.test$fit,ytest)
+krls.y.fit <- ifelse(krls.test$fit > .5, 1,0)
+krls.error.near <- prop.table(table(ytest==krls.y.fit ))
+
+#Now ROC plots
+#GLM
+prob <- predict(glm.out, newdata=test, type="response")
+prob <- ifelse(prob > .5, 1, 0)
+pred <- prediction(as.numeric(prob), as.matrix(test$ad_dummy))
+perf <- performance(pred, measure = "tpr", x.measure = "fpr")
+auc <- performance(pred, measure = "auc")
+auc.glm <- auc@y.values[[1]]
+
+roc.data.glm <- data.frame(fpr=unlist(perf@x.values),
+                       tpr=unlist(perf@y.values),
+                       model="GLM")
+ggplot(roc.data.glm, aes(x=fpr, ymin=0, ymax=tpr)) +
+    geom_ribbon(alpha=0.2) +
+    geom_line(aes(y=tpr)) +
+    annotate("text", x=.1, y=.8, label=paste("Logit", round(auc.glm,3), sep=" ")) +
+    geom_abline(intercept=0, slope=1, color="red", linetype=2) +
+  theme_minimal()
+
+#SVM
+
+prob <- predict(fit1,set2)
+pred <- prediction(as.numeric(prob), as.matrix(test$ad_dummy))
+perf <- performance(pred, measure = "tpr", x.measure = "fpr")
+auc <- performance(pred, measure = "auc")
+auc.svm <- auc@y.values[[1]]
+
+roc.data.svm <- data.frame(fpr=unlist(perf@x.values),
+                       tpr=unlist(perf@y.values),
+                       model="SVM")
+ggplot(roc.data.svm, aes(x=fpr, ymin=0, ymax=tpr)) +
+    geom_ribbon(alpha=0.2) +
+    geom_line(aes(y=tpr)) +
+    annotate("text", x=.1, y=.8, label=paste("SVM", round(auc.svm,3), sep=" ")) +
+    geom_abline(intercept=0, slope=1, color="red", linetype=2) + theme_minimal()
+
+#KRLS
+
+#out of sample
+krls.test <- predict(krls.out, newdata = Xtest)
+prob <- krls.test$fit
+pred <- prediction(prob, ytest)
+perf <- performance(pred, measure = "tpr", x.measure = "fpr")
+auc <- performance(pred, measure = "auc")
+auc.krls <- auc@y.values[[1]]
+
+roc.data.krls <- data.frame(fpr=unlist(perf@x.values),
+                       tpr=unlist(perf@y.values),
+                       model="KRLS")
+ggplot(roc.data.krls, aes(x=fpr, ymin=0, ymax=tpr)) +
+    geom_ribbon(alpha=0.2) +
+    geom_line(aes(y=tpr)) +
+    annotate("text", x=.1, y=.8, label=paste("KRLS", round(auc.krls,3), sep=" ")) +
+    geom_abline(intercept=0, slope=1, color="red", linetype=2) + theme_minimal()
+
+
+####
+#Combine all
+####
+
+fulldata <- rbind(roc.data.glm,
+                  roc.data.svm,
+                  roc.data.krls)
+
+
+near_match_ca <- ggplot(fulldata, aes(x=fpr,  y=tpr, group =model)) +
+  geom_line() +
+  theme(legend.position="none") +
+  labs(x="", y="") +
+  geom_abline(intercept=0, slope=1, color="red", linetype=2) + 
+  theme_minimal() +
+  annotate("text", x=rep(.65,4), size=2.5, 
+           y=c(.45, .4, .35, .3), 
+           label=c("Area Under Curve",
+                   paste("GLM", round(auc.glm,3), sep=" "),
+                   paste("SVM", round(auc.svm,3), sep=" "),
+                   paste("KRLS", round(auc.krls,3), sep=" ")))
+
+```
+
+## Now for the genetic 
+
+```{r}
+train <- gen.train
+test <- gen.test
+Xtrain <- train[,c(2:18)]%>% as.matrix
+ytrain <- train[,1] %>% as.matrix 
+Xtest <- test[,c(2:18)] %>% as.matrix
+ytest <- test[,1] %>% as.matrix
+
+
+#logit 
+model <- ad_dummy ~ ideology + pid5 + attend_church + union + income + income_dkna + employed + education + hispanic + white + female + age + watch_tv + newspaper + talk_radio + as.numeric(married) + as.numeric(health_insurance)
+glm.out <- glm(model, family = binomial(link="logit"), data = train)
+
+
+#out of sample
+yhat <- predict(glm.out, newdata=test, type="response")
+yhat <- ifelse(yhat > .5, 1, 0)
+glm.table.gen <- prop.table(table(predicted=yhat, truth=test$ad_dummy))
+glm.error.gen <- prop.table(table(yhat==test$ad_dummy))
+
+# SVM 
+set1 <- data.frame(y=as.factor(train$ad_dummy),x=train[,c(2:18)])
+set2 <- data.frame(y=as.factor(test$ad_dummy),x=test[,c(2:18)])
+
+fit1 <- svm(y ~ ., data = set1, kernel="linear", cost = 1)
+pred.orig <- predict(fit1,set2)
+svm.table.gen <- prop.table(table(predicted=pred.orig,truth=set2$y))
+svm.error.gen <- prop.table(table(pred.orig==set2$y))
+
+# tune1 <- tune(svm,y ~ .,data=set1, kernel='linear')
+# summary(tune1)
+# bestmod <- tune1$best.model
+# summary(bestmod)
+
+krls.out <- krls(X = Xtrain, y = ytrain)
+
+#out of sample
+krls.test <- predict(krls.out, newdata = Xtest)
+cor(krls.test$fit,ytest)
+krls.y.fit <- ifelse(krls.test$fit > .5, 1,0)
+krls.table.gen <- prop.table(table(true = ytest, predicted = krls.y.fit ))
+krls.error.gen <- prop.table(table(ytest== krls.y.fit ))
+
+#Now ROC plots
+#GLM
+prob <- predict(glm.out, newdata=test, type="response")
+prob <- ifelse(prob > .5, 1, 0)
+pred <- prediction(as.numeric(prob), as.matrix(test$ad_dummy))
+perf <- performance(pred, measure = "tpr", x.measure = "fpr")
+auc <- performance(pred, measure = "auc")
+auc.glm <- auc@y.values[[1]]
+
+roc.data.glm <- data.frame(fpr=unlist(perf@x.values),
+                       tpr=unlist(perf@y.values),
+                       model="GLM")
+ggplot(roc.data.glm, aes(x=fpr, ymin=0, ymax=tpr)) +
+    geom_ribbon(alpha=0.2) +
+    geom_line(aes(y=tpr)) +
+    annotate("text", x=.1, y=.8, label=paste("Logit", round(auc.glm,3), sep=" ")) +
+    geom_abline(intercept=0, slope=1, color="red", linetype=2) +
+  theme_minimal()
+
+#SVM
+
+prob <- predict(fit1,set2)
+pred <- prediction(as.numeric(prob), as.matrix(test$ad_dummy))
+perf <- performance(pred, measure = "tpr", x.measure = "fpr")
+auc <- performance(pred, measure = "auc")
+auc.svm <- auc@y.values[[1]]
+
+roc.data.svm <- data.frame(fpr=unlist(perf@x.values),
+                       tpr=unlist(perf@y.values),
+                       model="SVM")
+ggplot(roc.data.svm, aes(x=fpr, ymin=0, ymax=tpr)) +
+    geom_ribbon(alpha=0.2) +
+    geom_line(aes(y=tpr)) +
+    annotate("text", x=.1, y=.8, label=paste("SVM", round(auc.svm,3), sep=" ")) +
+    geom_abline(intercept=0, slope=1, color="red", linetype=2) + theme_minimal()
+
+#KRLS
+
+#out of sample
+krls.test <- predict(krls.out, newdata = Xtest)
+prob <- krls.test$fit
+pred <- prediction(prob, ytest)
+perf <- performance(pred, measure = "tpr", x.measure = "fpr")
+auc <- performance(pred, measure = "auc")
+auc.krls <- auc@y.values[[1]]
+
+roc.data.krls <- data.frame(fpr=unlist(perf@x.values),
+                       tpr=unlist(perf@y.values),
+                       model="KRLS")
+ggplot(roc.data.krls, aes(x=fpr, ymin=0, ymax=tpr)) +
+    geom_ribbon(alpha=0.2) +
+    geom_line(aes(y=tpr)) +
+    annotate("text", x=.1, y=.8, label=paste("KRLS", round(auc.krls,3), sep=" ")) +
+    geom_abline(intercept=0, slope=1, color="red", linetype=2) + theme_minimal()
+
+
+####
+#Combine all
+####
+
+fulldata <- rbind(roc.data.glm,
+                  roc.data.svm,
+                  roc.data.krls)
+
+
+genetic_match_ca <- ggplot(fulldata, aes(x=fpr,  y=tpr, group =model)) +
+  geom_line() +
+  theme(legend.position="none") +
+  labs(x="", y="") +
+  geom_abline(intercept=0, slope=1, color="red", linetype=2) + 
+  theme_minimal() +
+  annotate("text", x=rep(.15,4), size=2.5,
+           y=c(.9, .85, .8, .75), 
+           label=c("Area Under Curve",
+                   paste("GLM", round(auc.glm,3), sep=" "),
+                   paste("SVM", round(auc.svm,3), sep=" "),
+                   paste("KRLS", round(auc.krls,3), sep=" ")))
+```
+
+### Stick together 
+
+```{r}
+gen_ca <- genetic_match_ca + ggtitle("Genetic Match")
+full_ca <- full_match_ca + ggtitle("Full Match")
+near_ca <- near_match_ca + ggtitle("Near Neighbor Match")
+comb_ca <- combined_ca + ggtitle("Pre-Match")
+pdf(file= "/Users/bryanwilcox/Dropbox/courses/ucla/2016_winter/pols_200e_mle/final_replication/stats_presentation/matching.pdf")
+grid.arrange(gen_ca,near_ca,full_ca,comb_ca, nrow =2)
+dev.off()
+```
+
+## NY
+```{r}
+train <- df_train %>% filter(state=="ny")
+test <- df_test %>% filter(state=="ny")
+Xtrain <- train[,c(2:18)]%>% as.matrix
+ytrain <- train[,1] %>% as.matrix 
+Xtest <- test[,c(2:18)] %>% as.matrix
+ytest <- test[,1] %>% as.matrix
+
+#logit 
+model <- ad_dummy ~ ideology + pid5 + attend_church + union + income + income_dkna + employed + education + hispanic + white + female + age + watch_tv + newspaper + talk_radio + as.numeric(married) + as.numeric(health_insurance)
+glm.out <- glm(model, family = binomial(link="logit"), data = train)
+
+#in sample
+yhat <- predict(glm.out, newdata=train, type="response")
+yhat <- ifelse(yhat > .5, 1, 0)
+prop.table(table(predicted=yhat, truth=train$ad_dummy))
+
+#out of sample
+yhat <- predict(glm.out, newdata=test, type="response")
+yhat <- ifelse(yhat > .5, 1, 0)
+prop.table(table(predicted=yhat, truth=test$ad_dummy))
+
+# SVM 
+set1 <- data.frame(y=as.factor(train$ad_dummy),x=train[,c(2:18)])
+set2 <- data.frame(y=as.factor(test$ad_dummy),x=test[,c(2:18)])
+
+fit1 <- svm(y ~ ., data = set1, kernel="linear", cost = 1)
+pred.orig <- predict(fit1,set2)
+prop.table(table(predicted=pred.orig,truth=set2$y))
+
+tune1 <- tune(svm,y ~ .,data=set1, kernel='linear')
+summary(tune1)
+bestmod <- tune1$best.model
+summary(bestmod)
+
+krls.out <- krls(X = Xtrain, y = ytrain)
+
+#out of sample
+krls.test <- predict(krls.out, newdata = Xtest)
+cor(krls.test$fit,ytest)
+krls.y.fit <- ifelse(krls.test$fit > .5, 1,0)
+prop.table(table(true = ytest, predicted = krls.y.fit ))
+
+
+#Now ROC plots
+#GLM
+prob <- predict(glm.out, newdata=test, type="response")
+prob <- ifelse(prob > .5, 1, 0)
+pred <- prediction(as.numeric(prob), as.matrix(test$ad_dummy))
+perf <- performance(pred, measure = "tpr", x.measure = "fpr")
+auc <- performance(pred, measure = "auc")
+auc.glm <- auc@y.values[[1]]
+
+roc.data.glm <- data.frame(fpr=unlist(perf@x.values),
+                       tpr=unlist(perf@y.values),
+                       model="GLM")
+ggplot(roc.data.glm, aes(x=fpr, ymin=0, ymax=tpr)) +
+    geom_ribbon(alpha=0.2) +
+    geom_line(aes(y=tpr)) +
+    annotate("text", x=.1, y=.8, label=paste("Logit", round(auc.glm,3), sep=" ")) +
+    geom_abline(intercept=0, slope=1, color="red", linetype=2) +
+  theme_minimal()
+
+#SVM
+prob <- predict(fit1,set2)
+pred <- prediction(as.numeric(prob), as.matrix(test$ad_dummy))
+perf <- performance(pred, measure = "tpr", x.measure = "fpr")
+auc <- performance(pred, measure = "auc")
+auc.svm <- auc@y.values[[1]]
+
+roc.data.svm <- data.frame(fpr=unlist(perf@x.values),
+                       tpr=unlist(perf@y.values),
+                       model="SVM")
+ggplot(roc.data.svm, aes(x=fpr, ymin=0, ymax=tpr)) +
+    geom_ribbon(alpha=0.2) +
+    geom_line(aes(y=tpr)) +
+    annotate("text", x=.1, y=.8, label=paste("SVM", round(auc.svm,3), sep=" ")) +
+    geom_abline(intercept=0, slope=1, color="red", linetype=2) + theme_minimal()
+
+
+#KRLS
+
+#out of sample
+krls.test <- predict(krls.out, newdata = Xtest)
+prob <- krls.test$fit
+pred <- prediction(prob, ytest)
+perf <- performance(pred, measure = "tpr", x.measure = "fpr")
+auc <- performance(pred, measure = "auc")
+auc.krls <- auc@y.values[[1]]
+
+roc.data.krls <- data.frame(fpr=unlist(perf@x.values),
+                       tpr=unlist(perf@y.values),
+                       model="KRLS")
+ggplot(roc.data.krls, aes(x=fpr, ymin=0, ymax=tpr)) +
+    geom_ribbon(alpha=0.2) +
+    geom_line(aes(y=tpr)) +
+    annotate("text", x=.1, y=.8, label=paste("KRLS", round(auc.krls,3), sep=" ")) +
+    geom_abline(intercept=0, slope=1, color="red", linetype=2) + theme_minimal()
+
+
+####
+#Combine all
+####
+
+fulldata <- rbind(roc.data.glm,
+                  roc.data.svm,
+                  roc.data.krls)
+
+
+combined_ny <- ggplot(fulldata, aes(x=fpr,  y=tpr, group =model)) +
+  geom_line() +
+  theme(legend.position="none") +
+  labs(x="", y="") +
+  geom_abline(intercept=0, slope=1, color="red", linetype=2) + 
+  theme_minimal() +
+  annotate("text", x=rep(.15,4), 
+           y=c(.9, .85, .8, .75), 
+           label=c("Area Under Curve",
+                   paste("GLM", round(auc.glm,3), sep=" "),
+                   paste("SVM", round(auc.svm,3), sep=" "),
+                   paste("KRLS", round(auc.krls,3), sep=" ")))
+
+```
+
+## TX
+```{r}
+train <- df_train %>% filter(state=="tx")
+test <- df_test %>% filter(state=="tx")
+Xtrain <- train[,c(2:18)]%>% as.matrix
+ytrain <- train[,1] %>% as.matrix 
+Xtest <- test[,c(2:18)] %>% as.matrix
+ytest <- test[,1] %>% as.matrix
+
+#logit 
+model <- ad_dummy ~ ideology + pid5 + attend_church + union + income + income_dkna + employed + education + hispanic + white + female + age + watch_tv + newspaper + talk_radio + as.numeric(married) + as.numeric(health_insurance)
+glm.out <- glm(model, family = binomial(link="logit"), data = train)
+
+#in sample
+yhat <- predict(glm.out, newdata=train, type="response")
+yhat <- ifelse(yhat > .5, 1, 0)
+prop.table(table(predicted=yhat, truth=train$ad_dummy))
+
+#out of sample
+yhat <- predict(glm.out, newdata=test, type="response")
+yhat <- ifelse(yhat > .5, 1, 0)
+prop.table(table(predicted=yhat, truth=test$ad_dummy))
+
+# SVM 
+set1 <- data.frame(y=as.factor(train$ad_dummy),x=train[,c(2:18)])
+set2 <- data.frame(y=as.factor(test$ad_dummy),x=test[,c(2:18)])
+
+fit1 <- svm(y ~ ., data = set1, kernel="linear", cost = 1)
+pred.orig <- predict(fit1,set2)
+prop.table(table(predicted=pred.orig,truth=set2$y))
+
+tune1 <- tune(svm,y ~ .,data=set1, kernel='linear')
+summary(tune1)
+bestmod <- tune1$best.model
+summary(bestmod)
+
+krls.out <- krls(X = Xtrain, y = ytrain)
+
+#out of sample
+krls.test <- predict(krls.out, newdata = Xtest)
+cor(krls.test$fit,ytest)
+krls.y.fit <- ifelse(krls.test$fit > .5, 1,0)
+prop.table(table(true = ytest, predicted = krls.y.fit ))
+
+#Now ROC plots
+#GLM
+prob <- predict(glm.out, newdata=test, type="response")
+prob <- ifelse(prob > .5, 1, 0)
+pred <- prediction(as.numeric(prob), as.matrix(test$ad_dummy))
+perf <- performance(pred, measure = "tpr", x.measure = "fpr")
+auc <- performance(pred, measure = "auc")
+auc.glm <- auc@y.values[[1]]
+
+roc.data.glm <- data.frame(fpr=unlist(perf@x.values),
+                       tpr=unlist(perf@y.values),
+                       model="GLM")
+ggplot(roc.data.glm, aes(x=fpr, ymin=0, ymax=tpr)) +
+    geom_ribbon(alpha=0.2) +
+    geom_line(aes(y=tpr)) +
+    annotate("text", x=.1, y=.8, label=paste("Logit", round(auc.glm,3), sep=" ")) +
+    geom_abline(intercept=0, slope=1, color="red", linetype=2) +
+  theme_minimal()
+
+#SVM
+prob <- predict(fit1,set2)
+pred <- prediction(as.numeric(prob), as.matrix(test$ad_dummy))
+perf <- performance(pred, measure = "tpr", x.measure = "fpr")
+auc <- performance(pred, measure = "auc")
+auc.svm <- auc@y.values[[1]]
+
+roc.data.svm <- data.frame(fpr=unlist(perf@x.values),
+                       tpr=unlist(perf@y.values),
+                       model="SVM")
+ggplot(roc.data.svm, aes(x=fpr, ymin=0, ymax=tpr)) +
+    geom_ribbon(alpha=0.2) +
+    geom_line(aes(y=tpr)) +
+    annotate("text", x=.1, y=.8, label=paste("SVM", round(auc.svm,3), sep=" ")) +
+    geom_abline(intercept=0, slope=1, color="red", linetype=2) + theme_minimal()
+
+
+#KRLS
+
+#out of sample
+krls.test <- predict(krls.out, newdata = Xtest)
+prob <- krls.test$fit
+pred <- prediction(prob, ytest)
+perf <- performance(pred, measure = "tpr", x.measure = "fpr")
+auc <- performance(pred, measure = "auc")
+auc.krls <- auc@y.values[[1]]
+
+roc.data.krls <- data.frame(fpr=unlist(perf@x.values),
+                       tpr=unlist(perf@y.values),
+                       model="KRLS")
+ggplot(roc.data.krls, aes(x=fpr, ymin=0, ymax=tpr)) +
+    geom_ribbon(alpha=0.2) +
+    geom_line(aes(y=tpr)) +
+    annotate("text", x=.1, y=.8, label=paste("KRLS", round(auc.krls,3), sep=" ")) +
+    geom_abline(intercept=0, slope=1, color="red", linetype=2) + theme_minimal()
+
+
+####
+#Combine all
+####
+
+fulldata <- rbind(roc.data.glm,
+                  roc.data.svm,
+                  roc.data.krls)
+
+
+combined_tx <- ggplot(fulldata, aes(x=fpr,  y=tpr, group =model)) +
+  geom_line() +
+  theme(legend.position="none") +
+  labs(x="", y="") +
+  geom_abline(intercept=0, slope=1, color="red", linetype=2) + 
+  theme_minimal() +
+  annotate("text", x=rep(.15,4), 
+           y=c(.9, .85, .8, .75), 
+           label=c("Area Under Curve",
+                   paste("GLM", round(auc.glm,3), sep=" "),
+                   paste("SVM", round(auc.svm,3), sep=" "),
+                   paste("KRLS", round(auc.krls,3), sep=" ")))
+
+
+```
+
+## VA
+```{r}
+train <- df_train %>% filter(state=="va")
+test <- df_test %>% filter(state=="va")
+Xtrain <- train[,c(2:18)]%>% as.matrix
+ytrain <- train[,1] %>% as.matrix 
+Xtest <- test[,c(2:18)] %>% as.matrix
+ytest <- test[,1] %>% as.matrix
+
+#logit 
+model <- ad_dummy ~ ideology + pid5 + attend_church + union + income + income_dkna + employed + education + hispanic + white + female + age + watch_tv + newspaper + talk_radio + as.numeric(married) + as.numeric(health_insurance)
+glm.out <- glm(model, family = binomial(link="logit"), data = train)
+
+#in sample
+yhat <- predict(glm.out, newdata=train, type="response")
+yhat <- ifelse(yhat > .5, 1, 0)
+prop.table(table(predicted=yhat, truth=train$ad_dummy))
+
+#out of sample
+yhat <- predict(glm.out, newdata=test, type="response")
+yhat <- ifelse(yhat > .5, 1, 0)
+prop.table(table(predicted=yhat, truth=test$ad_dummy))
+
+# SVM 
+set1 <- data.frame(y=as.factor(train$ad_dummy),x=train[,c(2:18)])
+set2 <- data.frame(y=as.factor(test$ad_dummy),x=test[,c(2:18)])
+
+fit1 <- svm(y ~ ., data = set1, kernel="linear", cost = 1)
+pred.orig <- predict(fit1,set2)
+prop.table(table(predicted=pred.orig,truth=set2$y))
+
+tune1 <- tune(svm,y ~ .,data=set1, kernel='linear')
+summary(tune1)
+bestmod <- tune1$best.model
+summary(bestmod)
+
+krls.out <- krls(X = Xtrain, y = ytrain)
+
+#out of sample
+krls.test <- predict(krls.out, newdata = Xtest)
+cor(krls.test$fit,ytest)
+krls.y.fit <- ifelse(krls.test$fit > .5, 1,0)
+prop.table(table(true = ytest, predicted = krls.y.fit ))
+
+#Now ROC plots
+#GLM
+prob <- predict(glm.out, newdata=test, type="response")
+prob <- ifelse(prob > .5, 1, 0)
+pred <- prediction(as.numeric(prob), as.matrix(test$ad_dummy))
+perf <- performance(pred, measure = "tpr", x.measure = "fpr")
+auc <- performance(pred, measure = "auc")
+auc.glm <- auc@y.values[[1]]
+
+roc.data.glm <- data.frame(fpr=unlist(perf@x.values),
+                       tpr=unlist(perf@y.values),
+                       model="GLM")
+ggplot(roc.data.glm, aes(x=fpr, ymin=0, ymax=tpr)) +
+    geom_ribbon(alpha=0.2) +
+    geom_line(aes(y=tpr)) +
+    annotate("text", x=.1, y=.8, label=paste("Logit", round(auc.glm,3), sep=" ")) +
+    geom_abline(intercept=0, slope=1, color="red", linetype=2) +
+  theme_minimal()
+
+#SVM
+prob <- predict(fit1,set2)
+pred <- prediction(as.numeric(prob), as.matrix(test$ad_dummy))
+perf <- performance(pred, measure = "tpr", x.measure = "fpr")
+auc <- performance(pred, measure = "auc")
+auc.svm <- auc@y.values[[1]]
+
+roc.data.svm <- data.frame(fpr=unlist(perf@x.values),
+                       tpr=unlist(perf@y.values),
+                       model="SVM")
+ggplot(roc.data.svm, aes(x=fpr, ymin=0, ymax=tpr)) +
+    geom_ribbon(alpha=0.2) +
+    geom_line(aes(y=tpr)) +
+    annotate("text", x=.1, y=.8, label=paste("SVM", round(auc.svm,3), sep=" ")) +
+    geom_abline(intercept=0, slope=1, color="red", linetype=2) + theme_minimal()
+
+
+#KRLS
+
+#out of sample
+krls.test <- predict(krls.out, newdata = Xtest)
+prob <- krls.test$fit
+pred <- prediction(prob, ytest)
+perf <- performance(pred, measure = "tpr", x.measure = "fpr")
+auc <- performance(pred, measure = "auc")
+auc.krls <- auc@y.values[[1]]
+
+roc.data.krls <- data.frame(fpr=unlist(perf@x.values),
+                       tpr=unlist(perf@y.values),
+                       model="KRLS")
+ggplot(roc.data.krls, aes(x=fpr, ymin=0, ymax=tpr)) +
+    geom_ribbon(alpha=0.2) +
+    geom_line(aes(y=tpr)) +
+    annotate("text", x=.1, y=.8, label=paste("KRLS", round(auc.krls,3), sep=" ")) +
+    geom_abline(intercept=0, slope=1, color="red", linetype=2) + theme_minimal()
+
+
+####
+#Combine all
+####
+
+fulldata <- rbind(roc.data.glm,
+                  roc.data.svm,
+                  roc.data.krls)
+
+
+combined_va <- ggplot(fulldata, aes(x=fpr,  y=tpr, group =model)) +
+  geom_line() +
+  theme(legend.position="none") +
+  labs(x="", y="") +
+  geom_abline(intercept=0, slope=1, color="red", linetype=2) + 
+  theme_minimal() +
+  annotate("text", x=rep(.15,4), 
+           y=c(.9, .85, .8, .75), 
+           label=c("Area Under Curve",
+                   paste("GLM", round(auc.glm,3), sep=" "),
+                   paste("SVM", round(auc.svm,3), sep=" "),
+                   paste("KRLS", round(auc.krls,3), sep=" ")))
+
+```
+
+```{r}
+pdf(file="plot_tx.pdf")
+combined_tx
+dev.off()
+pdf(file="plot_ny.pdf")
+combined_ny
+dev.off()
+pdf(file="plot_ca.pdf")
+combined_ca
+dev.off()
+pdf(file="plot_va.pdf")
+combined_ca 
+dev.off()
+grid.arrange(tx, ny, ca, va, nrow=3)
+```
+
+
